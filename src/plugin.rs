@@ -59,7 +59,7 @@ static WARP_CORE_PLUGIN: RCorePluginStatic = RCorePluginStatic {
         name: c"warp".as_ptr(),
         desc: c"WARP signature format support".as_ptr(),
         author: c"WARP Contributors".as_ptr(),
-        version: c"0.1.0".as_ptr(),
+        version: c"0.1.1".as_ptr(),
         license: c"LGPL-3.0".as_ptr(),
         contact: std::ptr::null(),
         copyright: std::ptr::null(),
@@ -81,7 +81,10 @@ pub static radare_plugin: RLibStructStatic = RLibStructStatic {
 };
 
 unsafe extern "C" fn warp_init(_session: *mut RCorePluginSession) -> bool {
-    G_CONTAINER = Some(WarpContainer::new());
+    // The container (and its TLS-capable network client) is created lazily
+    // on the first zw command; constructing it while r2 is still scanning
+    // plugins has caused crashes on Windows.
+    G_CONTAINER = None;
     true
 }
 
@@ -124,8 +127,14 @@ unsafe extern "C" fn warp_call(session: *mut RCorePluginSession, input: *const c
     }
 
     std::panic::catch_unwind(|| {
-        if let Some(ref mut container) = G_CONTAINER {
-            handle_zw_command(core, container, input_str)
+        // SAFETY: single-threaded access via addr_of_mut, no shared ref
+        // to the mutable static (clippy forbids that)
+        let container = &mut *std::ptr::addr_of_mut!(G_CONTAINER);
+        if container.is_none() {
+            *container = Some(WarpContainer::new());
+        }
+        if let Some(c) = container.as_mut() {
+            handle_zw_command(core, c, input_str)
         } else {
             false
         }

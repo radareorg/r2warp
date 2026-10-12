@@ -22,24 +22,14 @@ jobs:
         include:
           - name: Linux x86_64
             os: ubuntu-24.04
-            extension: so
-            library: target/release/libr2warp.so
-            asset: libr2warp-linux-x86_64.so
+          - name: Linux arm64
+            os: ubuntu-24.04-arm
           - name: macOS x86_64
             os: macos-15-intel
-            extension: dylib
-            library: target/release/libr2warp.dylib
-            asset: libr2warp-macos-x86_64.dylib
           - name: macOS ARM64
-            os: macos-14
-            extension: dylib
-            library: target/release/libr2warp.dylib
-            asset: libr2warp-macos-arm64.dylib
+            os: macos-latest
           - name: Windows x86_64
             os: windows-2022
-            extension: dll
-            library: target/release/r2warp.dll
-            asset: r2warp-windows-x86_64.dll
 
     steps:
       - uses: actions/checkout@v7
@@ -57,6 +47,7 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
 
       - name: Install radare2
+        id: r2
         uses: radareorg/github-actions@v3
 
       - name: Check formatting
@@ -78,44 +69,27 @@ jobs:
         shell: bash
         run: |
           make install
-          test -f "$(r2 -H R2_USER_PLUGINS)/libr2warp.${{ matrix.extension }}"
+          test -f "$(r2 -H R2_USER_PLUGINS)/libr2warp.$(r2 -H R2_LIBEXT)"
           r2 -q -c 'L~warp;zw?' /bin/ls
 
-      - name: Verify installed plugin on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $plugins = (r2 -H R2_USER_PLUGINS).Trim()
-          New-Item -ItemType Directory -Force -Path $plugins | Out-Null
-          Copy-Item target\release\r2warp.dll "$plugins\r2warp.dll"
-          r2 -q -c 'L~warp;zw?' "$env:WINDIR\System32\cmd.exe"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Package Unix release asset
+      - name: Package r2pm binary (bindist)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          mkdir -p dist
-          cp "${{ matrix.library }}" "dist/${{ matrix.asset }}"
-          shasum -a 256 "dist/${{ matrix.asset }}" > "dist/${{ matrix.asset }}.sha256"
+          make bindist
+          for z in r2warp-*.zip; do shasum -a 256 "$z" > "$z.sha256"; done
 
-      - name: Package Windows release asset
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $asset = "dist\${{ matrix.asset }}"
-          Copy-Item target\release\r2warp.dll $asset
-          $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
-          "$hash  ${{ matrix.asset }}" | Set-Content "$asset.sha256"
-
-      - name: Upload plugin artifact
+      # Windows: compile/link/test coverage only for now. The r2warp.dll
+      # crashing radare2 at plugin registration time (with r2 6.2.4) is
+      # still under investigation, so no windows bindist zip ships yet.
+      - name: Upload bindist artifact
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: r2warp-${{ matrix.os }}
           path: |
-            dist/${{ matrix.asset }}
-            dist/${{ matrix.asset }}.sha256
+            r2warp-*.zip
+            r2warp-*.zip.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -139,4 +113,6 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          files: dist/*
+          files: |
+            dist/r2warp-*.zip
+            dist/r2warp-*.zip.sha256

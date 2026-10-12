@@ -14,18 +14,39 @@ fn r2_env(key: &str) -> String {
 }
 
 fn main() {
+    let target = env::var("TARGET").unwrap_or_default();
+    let is_linux = target.contains("linux");
+
     let ldflags = r2_env("R2_LDFLAGS");
+    // R2_LDFLAGS only carries -L paths; R2_LIBS has the full -lr_* list
+    let mut libs = String::new();
+    let rlibs = r2_env("R2_LIBS");
+    libs.push_str(&rlibs);
 
     for flag in ldflags.split_whitespace() {
         if let Some(path) = flag.strip_prefix("-L") {
             println!("cargo:rustc-link-search={path}");
-        } else if let Some(lib) = flag.strip_prefix("-l") {
+        }
+    }
+
+    for flag in libs.split_whitespace() {
+        if let Some(lib) = flag.strip_prefix("-l") {
+            // libdl does not exist on macos/windows
+            if lib == "dl" && !is_linux {
+                continue;
+            }
             println!("cargo:rustc-link-lib={lib}");
         }
     }
 
-    if env::var("TARGET").unwrap_or_default().contains("windows") {
+    if target.contains("windows") {
         println!("cargo:rustc-link-lib=shlwapi");
+    }
+
+    if target.contains("apple") {
+        // cdylib plugins must tolerate unresolved r_* symbols (resolved
+        // from the host radare2 process at dlopen time)
+        println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     }
 
     let r2_version = r2_env("R2_VERSION");
